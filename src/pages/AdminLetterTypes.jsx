@@ -1,6 +1,12 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Icon, Badge } from "../components/ui.jsx";
-import { readManagedLetterTypes, saveManagedLetterTypes } from "../adminData.js";
+import { jenisSurat } from "../data.js";
+import {
+  deleteManagedLetterType,
+  initializeManagedLetterTypes,
+  saveManagedLetterType,
+  subscribeToManagedLetterTypes,
+} from "../adminData.js";
 
 const emptyForm = { kode: "", nama: "", ringkas: "", durasi: "1 hari kerja", biaya: "Gratis", ikon: "file", requirements: "" };
 
@@ -9,17 +15,34 @@ function formFromType(type) {
 }
 
 export default function AdminLetterTypes() {
-  const [types, setTypes] = useState(readManagedLetterTypes);
+  const [types, setTypes] = useState(jenisSurat);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState("");
   const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  const commit = (nextTypes, feedback) => {
-    setTypes(saveManagedLetterTypes(nextTypes));
-    setMessage(feedback);
-  };
+  useEffect(() => {
+    let active = true;
+    let unsubscribe;
+    initializeManagedLetterTypes()
+      .then(() => {
+        if (active) {
+          unsubscribe = subscribeToManagedLetterTypes(setTypes, (error) => {
+            setLoadError(`Gagal memuat katalog Firebase: ${error.message}`);
+          });
+        }
+      })
+      .catch((error) => {
+        if (active) setLoadError(`Gagal menghubungkan katalog Firebase: ${error.message}`);
+      });
+    return () => {
+      active = false;
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
 
-  const saveType = (event) => {
+  const saveType = async (event) => {
     event.preventDefault();
     const requirements = form.requirements.split("\n").map((item) => item.trim()).filter(Boolean);
     if (!form.kode.trim() || form.nama.trim().length < 3 || !requirements.length) {
@@ -42,10 +65,18 @@ export default function AdminLetterTypes() {
       ikon: form.ikon || "file",
       syarat: requirements,
     };
-    const nextTypes = editingId ? types.map((type) => type.id === editingId ? nextType : type) : [...types, nextType];
-    commit(nextTypes, editingId ? "Jenis surat berhasil diperbarui." : "Jenis surat berhasil ditambahkan.");
-    setForm(emptyForm);
-    setEditingId("");
+    setSaving(true);
+    setMessage("");
+    try {
+      await saveManagedLetterType(nextType, editingId);
+      setMessage(editingId ? "Jenis surat berhasil diperbarui." : "Jenis surat berhasil ditambahkan.");
+      setForm(emptyForm);
+      setEditingId("");
+    } catch (error) {
+      setMessage(`Jenis surat gagal disimpan: ${error.message}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const editType = (type) => {
@@ -54,12 +85,18 @@ export default function AdminLetterTypes() {
     setMessage("");
   };
 
-  const removeType = (type) => {
+  const removeType = async (type) => {
     if (!window.confirm(`Hapus jenis surat ${type.nama}?`)) return;
-    commit(types.filter((item) => item.id !== type.id), "Jenis surat dihapus.");
-    if (editingId === type.id) {
-      setEditingId("");
-      setForm(emptyForm);
+    setMessage("");
+    try {
+      await deleteManagedLetterType(type.id);
+      setMessage("Jenis surat dihapus.");
+      if (editingId === type.id) {
+        setEditingId("");
+        setForm(emptyForm);
+      }
+    } catch (error) {
+      setMessage(`Jenis surat gagal dihapus: ${error.message}`);
     }
   };
 
@@ -71,6 +108,7 @@ export default function AdminLetterTypes() {
         <p>Kelola daftar surat administrasi, durasi layanan, dan dokumen yang perlu disiapkan warga.</p>
       </section>
 
+      {loadError && <p className="login-error" role="alert">{loadError}</p>}
       <div className="admin-letter-layout">
         <section className="admin-letter-list">
           <div className="admin-letter-list-head"><div><h3>Jenis surat tersedia</h3><p>{types.length} jenis layanan · perubahan akan digunakan pada formulir pengajuan warga</p></div><Badge tone="tone-info">Katalog aktif</Badge></div>
@@ -101,10 +139,10 @@ export default function AdminLetterTypes() {
               <div className="field span-2"><label htmlFor="letter-fee">Biaya</label><input id="letter-fee" value={form.biaya} onChange={(event) => setForm((current) => ({ ...current, biaya: event.target.value }))} placeholder="Gratis" /></div>
             </div>
             {message && <p className="admin-form-message" role="status">{message}</p>}
-            <button type="submit" className="btn btn-primary btn-block"><Icon name={editingId ? "check" : "plus"} size={16} />{editingId ? "Simpan perubahan" : "Tambah jenis surat"}</button>
+            <button type="submit" className="btn btn-primary btn-block" disabled={saving}><Icon name={editingId ? "check" : "plus"} size={16} />{saving ? "Menyimpan…" : editingId ? "Simpan perubahan" : "Tambah jenis surat"}</button>
             {editingId && <button type="button" className="btn btn-outline btn-block" onClick={() => { setEditingId(""); setForm(emptyForm); setMessage(""); }}>Batal mengubah</button>}
           </form>
-          <p className="admin-demo-callout"><Icon name="alert" size={16} /> Katalog disimpan di browser ini untuk demonstrasi. Pengajuan yang sudah dibuat tidak berubah.</p>
+          <p className="admin-demo-callout"><Icon name="alert" size={16} /> Katalog tersimpan di Firestore dan digunakan bersama oleh formulir pengajuan warga.</p>
         </aside>
       </div>
     </>

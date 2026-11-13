@@ -1,7 +1,8 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Icon, Badge } from "../components/ui.jsx";
-import { addResidentRecord, readResidentData, writeResidentData } from "../residentData.js";
+import { updateResidentServiceProfile } from "../accountData.js";
+import { createResidentReport, subscribeToResidentSubmissions } from "../firestoreData.js";
 
 const kategori = ["Kebersihan", "Fasilitas", "Lingkungan", "Keamanan", "Ketertiban"];
 const prioritas = [
@@ -12,29 +13,57 @@ const prioritas = [
 
 export default function LaporanMandiri({ session }) {
   const [form, setForm] = useState(() => {
-    const profile = readResidentData(session?.identity).profile;
+    const accountProfile = session?.profile || {};
     return {
       kategori: "Kebersihan",
       judul: "",
       lokasi: "",
       deskripsi: "",
       prioritas: "Sedang",
-      nama: profile.name || "",
-      telepon: profile.phone || "",
+      nama: accountProfile.name || "",
+      telepon: accountProfile.phone || "",
     };
   });
   const [foto, setFoto] = useState([]);
   const [errors, setErrors] = useState({});
+  const [submissionError, setSubmissionError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [tiket, setTiket] = useState(null);
-  const [recentReports, setRecentReports] = useState(() => readResidentData(session?.identity).reports);
+  const [recentReports, setRecentReports] = useState([]);
+  const [recentReportsError, setRecentReportsError] = useState("");
   const fileRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      return subscribeToResidentSubmissions(
+        session,
+        (snapshot) => {
+          setRecentReports(snapshot.docs.map((item) => {
+            const data = item.data();
+            return {
+              id: data.ticketId || item.id,
+              judul: data.title || "Laporan warga",
+              kategori: data.category || "Umum",
+              status: data.status || "Menunggu",
+              createdAt: data.createdAt?.toDate?.().toISOString() || "",
+            };
+          }).sort((first, second) => second.createdAt.localeCompare(first.createdAt)));
+        },
+        () => {},
+        (error) => setRecentReportsError(`Gagal memuat laporan Anda: ${error.message}`)
+      );
+    } catch (error) {
+      setRecentReportsError(`Gagal menghubungkan laporan Anda: ${error.message}`);
+      return undefined;
+    }
+  }, [session]);
 
   const set = (k, v) => {
     setForm((f) => ({ ...f, [k]: v }));
     setErrors((e) => ({ ...e, [k]: undefined }));
   };
 
-  const kirim = (e) => {
+  const kirim = async (e) => {
     e.preventDefault();
     const err = {};
     if (form.judul.trim().length < 6) err.judul = "Judul laporan minimal 6 karakter.";
@@ -45,17 +74,27 @@ export default function LaporanMandiri({ session }) {
     setErrors(err);
     if (Object.keys(err).length) return;
 
+    setSubmitting(true);
+    setSubmissionError("");
+    let submitted;
+    try {
+      await updateResidentServiceProfile(session, { name: form.nama, phone: form.telepon });
+      submitted = await createResidentReport(session, { ...form, foto: foto.length });
+    } catch (error) {
+      setSubmissionError(error.message || "Laporan gagal dikirim.");
+      setSubmitting(false);
+      return;
+    }
+
     const record = {
-      id: "LPR-" + Math.floor(1043 + Math.random() * 200),
-      createdAt: new Date().toISOString(),
-      status: "Menunggu",
+      id: submitted.ticketId,
+      createdAt: submitted.createdAt,
+      status: submitted.status,
       ...form,
       foto: foto.length,
     };
-    addResidentRecord(session?.identity, "reports", record);
-    writeResidentData(session?.identity, { profile: { name: form.nama, phone: form.telepon } });
-    setRecentReports((reports) => [record, ...reports]);
     setTiket({ nomor: record.id, ...record });
+    setSubmitting(false);
   };
 
   return (
@@ -88,8 +127,8 @@ export default function LaporanMandiri({ session }) {
                     lokasi: "",
                     deskripsi: "",
                     prioritas: "Sedang",
-                    nama: readResidentData(session?.identity).profile.name || "",
-                    telepon: readResidentData(session?.identity).profile.phone || "",
+                    nama: form.nama,
+                    telepon: form.telepon,
                   });
                 }}
               >
@@ -104,6 +143,7 @@ export default function LaporanMandiri({ session }) {
             <p className="muted small-text" style={{ margin: "4px 0 18px" }}>
               Sertakan lokasi dan deskripsi yang jelas agar pengurus dapat cepat menindaklanjuti.
             </p>
+            {submissionError && <p className="login-error" role="alert">{submissionError}</p>}
 
             <div className="form-grid">
               <div className="field">
@@ -229,8 +269,8 @@ export default function LaporanMandiri({ session }) {
             </div>
 
             <div className="btn-row" style={{ marginTop: 20, justifyContent: "flex-end" }}>
-              <button type="submit" className="btn btn-primary">
-                <Icon name="megaphone" size={16} /> Kirim laporan
+              <button type="submit" className="btn btn-primary" disabled={submitting}>
+                <Icon name="megaphone" size={16} /> {submitting ? "Mengirim…" : "Kirim laporan"}
               </button>
             </div>
           </form>
@@ -243,6 +283,7 @@ export default function LaporanMandiri({ session }) {
             <h3 style={{ fontSize: 14.5 }}>Laporan saya</h3>
             <span className="tiny muted">{recentReports.length} laporan</span>
           </div>
+          {recentReportsError && <p className="login-error" role="alert">{recentReportsError}</p>}
           {recentReports.length ? recentReports.slice(0, 3).map((report) => (
             <div key={report.id} className="notif-item" style={{ padding: "12px 2px" }}>
               <div>

@@ -20,7 +20,7 @@ const titles = {
   "/lapor": ["Laporan Mandiri", "Sampaikan masalah lingkungan langsung ke pengurus"],
   "/profil": ["Profil Saya", "Informasi pribadi dan riwayat domisili warga"],
   "/dashboard": ["Dashboard Pengurus", "Ringkasan operasional, verifikasi, dan data warga"],
-  "/admin/akun": ["Manajemen Akun", "Kelola identitas pengguna, peran, dan izin akses"],
+  "/admin/akun": ["Manajemen Akun", "Kelola identitas pengguna, pergit branch -M mainan, dan izin akses"],
   "/admin/surat": ["Pengaturan Jenis Surat", "Kelola katalog surat dan persyaratan warga"],
   "/sistem": ["Dokumen Sistem", "Use case diagram, flowchart, dan ERD"],
 };

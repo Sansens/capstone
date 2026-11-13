@@ -1,7 +1,8 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Icon, Badge } from "../components/ui.jsx";
-import { readResidentData } from "../residentData.js";
+import { subscribeToResidentProfile } from "../accountData.js";
+import { subscribeToResidentSubmissions } from "../firestoreData.js";
 
 const actions = [
   { to: "/lapor", title: "Buat laporan", text: "Sampaikan masalah di lingkungan RT.", icon: "megaphone", tone: "orange", label: "Laporan mandiri" },
@@ -15,13 +16,59 @@ function formatDate(value) {
 }
 
 export default function ResidentDashboard({ session }) {
-  const data = useMemo(() => readResidentData(session?.identity), [session?.identity]);
-  const recent = useMemo(() => [
-    ...data.reports.map((item) => ({ ...item, type: "Laporan" })),
-    ...data.letters.map((item) => ({ ...item, type: "Pengajuan surat" })),
-  ].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)), [data]);
-  const name = data.profile.name || "Warga";
-  const profileProgress = [data.profile.name, data.profile.phone, data.profile.block, data.profile.address].filter(Boolean).length;
+  const [profile, setProfile] = useState(() => ({
+    name: "",
+    phone: "",
+    block: "",
+    address: "",
+    ...(session?.profile || {}),
+  }));
+  const [reports, setReports] = useState([]);
+  const [letters, setLetters] = useState([]);
+  const [loadError, setLoadError] = useState("");
+
+  useEffect(() => {
+    try {
+      return subscribeToResidentProfile(session, (data) => setProfile(data.profile), (error) => {
+        setLoadError(`Gagal memuat profil warga: ${error.message}`);
+      });
+    } catch (error) {
+      setLoadError(`Gagal menghubungkan profil warga: ${error.message}`);
+      return undefined;
+    }
+  }, [session]);
+
+  useEffect(() => {
+    const mapItems = (snapshot, type) => snapshot.docs.map((item) => {
+      const data = item.data();
+      const date = data.createdAt?.toDate?.();
+      return {
+        id: data.ticketId || item.id,
+        title: data.title || data.letterType || "Pengajuan",
+        jenis: data.letterType || "",
+        createdAt: date ? date.toISOString() : data.createdAt || "",
+        status: data.status || "Menunggu",
+        type,
+      };
+    }).sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0));
+
+    try {
+      return subscribeToResidentSubmissions(
+        session,
+        (snapshot) => setReports(mapItems(snapshot, "Laporan")),
+        (snapshot) => setLetters(mapItems(snapshot, "Pengajuan surat")),
+        (error) => setLoadError(`Gagal memuat status pengajuan: ${error.message}`)
+      );
+    } catch (error) {
+      setLoadError(`Gagal menghubungkan status pengajuan: ${error.message}`);
+      return undefined;
+    }
+  }, [session]);
+
+  const recent = useMemo(() => [...reports, ...letters]
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)), [reports, letters]);
+  const name = profile.name || "Warga";
+  const profileProgress = [profile.name, profile.phone, profile.block, profile.address].filter(Boolean).length;
 
   return (
     <>
@@ -33,6 +80,7 @@ export default function ResidentDashboard({ session }) {
         </div>
         <div className="resident-welcome-mark"><Icon name="home" size={28} /></div>
       </section>
+      {loadError && <p className="login-error" role="alert">{loadError}</p>}
 
       <section className="section resident-services">
         <div className="section-head">
@@ -74,13 +122,13 @@ export default function ResidentDashboard({ session }) {
 
         <aside className="card resident-profile-summary">
           <span className="eyebrow">Data warga</span>
-          <div className="resident-profile-person"><span className="avatar">{name.slice(0, 2).toUpperCase()}</span><div><strong>{name}</strong><small>{data.profile.block ? `Blok ${data.profile.block}` : "Blok belum dilengkapi"}</small></div></div>
+          <div className="resident-profile-person"><span className="avatar">{name.slice(0, 2).toUpperCase()}</span><div><strong>{name}</strong><small>{profile.block ? `Blok ${profile.block}` : "Blok belum dilengkapi"}</small></div></div>
           <div className="resident-progress"><div><span>Kelengkapan profil</span><strong>{profileProgress}/4</strong></div><i><b style={{ width: `${profileProgress * 25}%` }} /></i></div>
           <p className="small-text muted">Lengkapi data pribadi agar pengurus dapat memproses layanan Anda dengan tepat.</p>
           <Link to="/profil" className="btn btn-outline btn-block resident-profile-button">Lihat profil <Icon name="arrow" size={15} /></Link>
         </aside>
       </section>
-      <p className="resident-demo-note"><Icon name="alert" size={14} /> Data yang Anda masukkan pada versi demo disimpan di browser ini saja.</p>
+      <p className="resident-demo-note"><Icon name="alert" size={14} /> Profil dan status pengajuan diperbarui langsung dari Firebase.</p>
     </>
   );
 }

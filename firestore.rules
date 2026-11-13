@@ -1,0 +1,151 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function accountExists() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/Account/$(request.auth.uid));
+    }
+
+    function hasRole(roleName) {
+      return accountExists() &&
+        get(/databases/$(database)/documents/Account/$(request.auth.uid)).data.role == roleName &&
+        (!('status' in get(/databases/$(database)/documents/Account/$(request.auth.uid)).data) ||
+          get(/databases/$(database)/documents/Account/$(request.auth.uid)).data.status != 'Nonaktif');
+    }
+
+    function canReadSubmission() {
+      return signedIn() &&
+        (resource.data.residentUid == request.auth.uid ||
+          hasRole('rt-admin') ||
+          hasRole('system-admin'));
+    }
+
+    function canCreateSubmission() {
+      return hasRole('resident') &&
+        request.resource.data.residentUid == request.auth.uid &&
+        request.resource.data.residentNik ==
+          get(/databases/$(database)/documents/Account/$(request.auth.uid)).data.nik &&
+        request.resource.data.status == 'Menunggu' &&
+        request.resource.data.createdAt == request.time;
+    }
+
+    function validReportFields() {
+      return request.resource.data.keys().hasOnly([
+          'ticketId', 'residentUid', 'residentNik', 'residentName', 'phone',
+          'category', 'title', 'location', 'description', 'priority',
+          'photoCount', 'status', 'createdAt'
+        ]) &&
+        request.resource.data.keys().hasAll([
+          'ticketId', 'residentUid', 'residentNik', 'residentName', 'category',
+          'title', 'location', 'description', 'priority', 'status', 'createdAt'
+        ]);
+    }
+
+    function validLetterFields() {
+      return request.resource.data.keys().hasOnly([
+          'ticketId', 'residentUid', 'residentNik', 'residentName', 'phone',
+          'address', 'block', 'letterType', 'purpose', 'attachmentCount',
+          'status', 'correctionNote', 'createdAt'
+        ]) &&
+        request.resource.data.keys().hasAll([
+          'ticketId', 'residentUid', 'residentNik', 'residentName', 'letterType',
+          'purpose', 'status', 'correctionNote', 'createdAt'
+        ]);
+    }
+
+    function canUpdateReport() {
+      return hasRole('rt-admin') &&
+        resource.data.status != 'Selesai' &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'updatedAt']) &&
+        request.resource.data.status in ['Menunggu', 'Diproses', 'Selesai'] &&
+        request.resource.data.updatedAt == request.time;
+    }
+
+    function canUpdateLetterRequest() {
+      return hasRole('rt-admin') &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'correctionNote', 'updatedAt']) &&
+        request.resource.data.status in [
+          'Menunggu', 'Diproses', 'Perlu perbaikan', 'Disetujui', 'Diterbitkan', 'Ditolak'
+        ] &&
+        request.resource.data.correctionNote is string &&
+        request.resource.data.updatedAt == request.time;
+    }
+
+    function validLetterType() {
+      return request.resource.data.keys().hasOnly([
+          'kode', 'nama', 'ringkas', 'durasi', 'biaya', 'ikon', 'syarat',
+          'createdAt', 'updatedAt'
+        ]) &&
+        request.resource.data.keys().hasAll([
+          'kode', 'nama', 'ringkas', 'durasi', 'biaya', 'ikon', 'syarat',
+          'updatedAt'
+        ]) &&
+        request.resource.data.kode is string &&
+        request.resource.data.nama is string &&
+        request.resource.data.syarat is list &&
+        request.resource.data.updatedAt == request.time;
+    }
+
+    match /Account/{uid} {
+      allow read: if signedIn() &&
+        (request.auth.uid == uid || hasRole('rt-admin') || hasRole('system-admin'));
+      allow create: if false;
+      allow delete: if hasRole('system-admin') &&
+        request.auth.uid != uid &&
+        resource.data.role in ['resident', 'rt-admin'];
+      allow update: if (
+          request.auth.uid == uid &&
+          hasRole('resident') &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly([
+              'displayName', 'contactEmail', 'phone', 'block', 'address',
+              'familyCard', 'residenceHistory', 'updatedAt'
+            ]) &&
+          request.resource.data.updatedAt == request.time
+        ) || (
+          hasRole('rt-admin') &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['residencyStatus', 'updatedAt']) &&
+          request.resource.data.residencyStatus in [
+            'Menunggu verifikasi', 'Terverifikasi', 'Pindah keluar'
+          ] &&
+          request.resource.data.updatedAt == request.time
+        ) || (
+          hasRole('system-admin') &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['displayName', 'role', 'status', 'updatedAt']) &&
+          request.resource.data.role in ['resident', 'rt-admin', 'system-admin'] &&
+          (!('status' in request.resource.data) ||
+            request.resource.data.status in ['Aktif', 'Nonaktif']) &&
+          request.resource.data.updatedAt == request.time
+        );
+    }
+
+    match /Reports/{reportId} {
+      allow read: if canReadSubmission();
+      allow create: if canCreateSubmission() && validReportFields();
+      allow update: if canUpdateReport();
+      allow delete: if false;
+    }
+
+    match /LetterRequests/{requestId} {
+      allow read: if canReadSubmission();
+      allow create: if canCreateSubmission() && validLetterFields();
+      allow update: if canUpdateLetterRequest();
+      allow delete: if false;
+    }
+
+    match /LetterTypes/{typeId} {
+      allow read: if signedIn();
+      allow create, update: if hasRole('system-admin') && validLetterType();
+      allow delete: if hasRole('system-admin');
+    }
+  }
+}

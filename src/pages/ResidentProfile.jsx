@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Icon, Badge } from "../components/ui.jsx";
-import { readResidentData, writeResidentData } from "../residentData.js";
+import { saveResidentProfile, subscribeToResidentProfile } from "../accountData.js";
 
 function maskIdentity(value = "") {
   if (value.length < 6) return value || "Belum diisi";
@@ -12,16 +12,36 @@ function formatDate(value) {
 }
 
 export default function ResidentProfile({ session }) {
-  const data = useMemo(() => readResidentData(session?.identity), [session?.identity]);
-  const [form, setForm] = useState(data.profile);
+  const [profile, setProfile] = useState(() => ({
+    name: "",
+    phone: "",
+    email: "",
+    block: "",
+    address: "",
+    familyCard: "",
+    status: "Menunggu verifikasi",
+    identity: session?.identity || "",
+    ...(session?.profile || {}),
+  }));
+  const [form, setForm] = useState(profile);
   const [saved, setSaved] = useState(false);
   const [errors, setErrors] = useState({});
-  const [history, setHistory] = useState(data.residenceHistory);
+  const [history, setHistory] = useState([]);
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setForm(data.profile);
-    setHistory(data.residenceHistory);
-  }, [data]);
+    try {
+      return subscribeToResidentProfile(session, (data) => {
+        setProfile(data.profile);
+        setForm(data.profile);
+        setHistory(data.residenceHistory);
+      }, (error) => setSaveError(`Gagal memuat profil Firebase: ${error.message}`));
+    } catch (error) {
+      setSaveError(`Gagal menghubungkan profil Firebase: ${error.message}`);
+      return undefined;
+    }
+  }, [session]);
 
   const update = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -29,7 +49,7 @@ export default function ResidentProfile({ session }) {
     setSaved(false);
   };
 
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
     const nextErrors = {};
     if (form.name.trim().length < 3) nextErrors.name = "Nama minimal 3 karakter.";
@@ -39,8 +59,7 @@ export default function ResidentProfile({ session }) {
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
 
-    const currentData = readResidentData(session?.identity);
-    const oldAddress = currentData.profile.address;
+    const oldAddress = profile.address;
     const newAddress = form.address.trim();
     const nextHistory = newAddress && oldAddress !== newAddress
       ? [{
@@ -48,15 +67,22 @@ export default function ResidentProfile({ session }) {
           date: new Date().toISOString(),
           title: oldAddress ? "Perubahan alamat domisili" : "Domisili awal dicatat",
           detail: oldAddress ? `${oldAddress} → ${newAddress}` : newAddress,
-        }, ...currentData.residenceHistory]
-      : currentData.residenceHistory;
-    const nextData = writeResidentData(session?.identity, {
-      profile: { ...form, name: form.name.trim(), phone: form.phone.trim(), email: form.email.trim(), block: form.block.trim(), address: form.address.trim() },
-      residenceHistory: nextHistory,
-    });
-    setForm(nextData.profile);
-    setHistory(nextData.residenceHistory);
-    setSaved(true);
+        }, ...history]
+      : history;
+    const nextProfile = { ...form, name: form.name.trim(), phone: form.phone.trim(), email: form.email.trim(), block: form.block.trim(), address: form.address.trim() };
+    setSaving(true);
+    setSaveError("");
+    try {
+      await saveResidentProfile(session, nextProfile, nextHistory);
+      setProfile(nextProfile);
+      setForm(nextProfile);
+      setHistory(nextHistory);
+      setSaved(true);
+    } catch (error) {
+      setSaveError(`Profil gagal disimpan ke Firebase: ${error.message}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -69,6 +95,7 @@ export default function ResidentProfile({ session }) {
 
       <div className="resident-profile-layout">
         <form className="card card-pad resident-profile-form" onSubmit={submit} noValidate>
+          {saveError && <p className="login-error" role="alert">{saveError}</p>}
           <div className="resident-card-head"><div><h3>Informasi pribadi</h3><p>Perbarui nama dan kontak yang dapat dihubungi pengurus.</p></div><span className="resident-profile-avatar">{(form.name || "W").slice(0, 1).toUpperCase()}</span></div>
           <div className="form-grid">
             <div className={`field span-2 ${errors.name ? "invalid" : ""}`}><label htmlFor="profile-name">Nama lengkap <span className="req">*</span></label><input id="profile-name" value={form.name} onChange={(event) => update("name", event.target.value)} placeholder="Nama sesuai KTP" />{errors.name && <span className="err">{errors.name}</span>}</div>
@@ -83,7 +110,7 @@ export default function ResidentProfile({ session }) {
             <div className="field"><label htmlFor="profile-kk">Nomor kartu keluarga</label><input id="profile-kk" value={form.familyCard} onChange={(event) => update("familyCard", event.target.value)} placeholder="Nomor KK" /></div>
             <div className={`field span-2 ${errors.address ? "invalid" : ""}`}><label htmlFor="profile-address">Alamat lengkap <span className="req">*</span></label><textarea id="profile-address" value={form.address} onChange={(event) => update("address", event.target.value)} placeholder="Jalan, blok, nomor rumah, RT/RW" />{errors.address && <span className="err">{errors.address}</span>}</div>
           </div>
-          <div className="resident-profile-form-actions">{saved && <span className="resident-saved"><Icon name="check" size={15} /> Perubahan tersimpan di perangkat ini.</span>}<button type="submit" className="btn btn-primary"><Icon name="check" size={15} /> Simpan perubahan</button></div>
+          <div className="resident-profile-form-actions">{saved && <span className="resident-saved"><Icon name="check" size={15} /> Perubahan tersimpan di Firebase.</span>}<button type="submit" className="btn btn-primary" disabled={saving}><Icon name="check" size={15} /> {saving ? "Menyimpan…" : "Simpan perubahan"}</button></div>
         </form>
 
         <aside className="resident-history-column">
@@ -113,7 +140,7 @@ export default function ResidentProfile({ session }) {
           </section>
         </aside>
       </div>
-      <p className="resident-demo-note"><Icon name="alert" size={14} /> Data profil demo disimpan secara lokal di browser dan tidak dikirim ke pengurus.</p>
+      <p className="resident-demo-note"><Icon name="alert" size={14} /> Profil dan riwayat domisili tersimpan pada dokumen akun Firebase dan dapat dilihat oleh Pengurus RT.</p>
     </>
   );
 }

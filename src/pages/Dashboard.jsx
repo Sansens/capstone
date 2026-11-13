@@ -1,16 +1,13 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { Icon, Badge } from "../components/ui.jsx";
 import {
-  statistik,
   laporanTrend,
-  laporanWarga,
-  pengajuanMasuk,
-  dataWarga,
   mutasiWarga,
-  jenisSurat,
 } from "../data.js";
-import { listResidentAccounts, updateResidentRecord, writeResidentData } from "../residentData.js";
+import { subscribeToRtSubmissions, updateRtSubmission } from "../firestoreData.js";
+import { subscribeToResidentAccounts, updateResidentStatus } from "../accountData.js";
+import { subscribeToManagedLetterTypes } from "../adminData.js";
 
 const tabs = [
   { id: "ringkasan", label: "Dashboard RT" },
@@ -28,61 +25,100 @@ const donutData = [
 
 const maxTrend = Math.max(...laporanTrend.map((d) => Math.max(d.laporan, d.surat)));
 
-function maskedNik(value = "") {
-  if (!value || value.includes("•")) return value || "—";
-  return `${"•".repeat(Math.max(0, value.length - 4))}${value.slice(-4)}`;
+function formatFirestoreDate(value) {
+  const date = value?.toDate ? value.toDate() : value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "Baru";
+  return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", year: "numeric" }).format(date);
+}
+
+function mapReportSnapshot(snapshot) {
+  const data = snapshot.data();
+  return {
+    ...data,
+    id: data.ticketId || snapshot.id,
+    docId: snapshot.id,
+    judul: data.title || "Laporan warga",
+    kategori: data.category || "Umum",
+    pelapor: data.residentName || "Warga",
+    lokasi: data.location || "",
+    deskripsi: data.description || "",
+    prioritas: data.priority || "Sedang",
+    status: data.status || "Menunggu",
+    tanggal: formatFirestoreDate(data.createdAt),
+  };
+}
+
+function mapLetterSnapshot(snapshot) {
+  const data = snapshot.data();
+  return {
+    ...data,
+    id: data.ticketId || snapshot.id,
+    docId: snapshot.id,
+    jenis: data.letterType || "Pengajuan surat",
+    pemohon: data.residentName || "Warga",
+    blok: data.block || "—",
+    tanggal: formatFirestoreDate(data.createdAt),
+    status: data.status || "Menunggu",
+    correctionNote: data.correctionNote || "",
+  };
 }
 
 export default function Dashboard() {
   const [params, setParams] = useSearchParams();
   const tab = tabs.some((item) => item.id === params.get("tab")) ? params.get("tab") : "ringkasan";
-  const [accounts] = useState(listResidentAccounts);
-  const [laporan, setLaporan] = useState(() => {
-    const submitted = listResidentAccounts().flatMap((account) => (account.reports || []).map((item) => ({
-      ...item,
-      pelapor: item.nama || account.profile.name || "Warga",
-      nik: account.profile.identity || "",
-      tanggal: item.createdAt ? new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short" }).format(new Date(item.createdAt)) : "Baru",
-      judul: item.judul || item.title,
-      localIdentity: account.profile.identity,
-      localCollection: "reports",
-    })));
-    return [...submitted, ...laporanWarga];
-  });
-  const [pengajuan, setPengajuan] = useState(() => {
-    const submitted = listResidentAccounts().flatMap((account) => (account.letters || []).map((item) => ({
-      ...item,
-      jenis: item.jenis || item.title || "Pengajuan surat",
-      pemohon: account.profile.name || "Warga",
-      nik: account.profile.identity || "",
-      blok: account.profile.block || "—",
-      tanggal: item.createdAt ? new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short" }).format(new Date(item.createdAt)) : "Baru",
-      localIdentity: account.profile.identity,
-      localCollection: "letters",
-    })));
-    return [...submitted, ...pengajuanMasuk];
-  });
+  const [firestoreError, setFirestoreError] = useState("");
+  const [laporan, setLaporan] = useState([]);
+  const [pengajuan, setPengajuan] = useState([]);
+  const [letterTypes, setLetterTypes] = useState([]);
   const [mutasi, setMutasi] = useState(() => {
     try { return JSON.parse(localStorage.getItem("silaras-rt-mutasi") || "null") || mutasiWarga; }
     catch { return mutasiWarga; }
   });
-  const [residents, setResidents] = useState(() => {
-    const stored = listResidentAccounts().filter((account) => account.profile?.name).map((account) => ({
-      nama: account.profile.name,
-      nik: account.profile.identity || "—",
-      blok: account.profile.block || "—",
-      kk: account.profile.familyCard || "—",
-      anggota: 1,
-      status: account.profile.status || "Tetap",
-      kontak: account.profile.phone || "—",
-    }));
-    return [...stored, ...dataWarga];
-  });
+  const [residents, setResidents] = useState([]);
   const [q, setQ] = useState("");
   const [submissionQuery, setSubmissionQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("Semua");
   const [formMutasi, setFormMutasi] = useState({ nama: "", jenis: "Pindah masuk", asal: "" });
   const [correctionNotes, setCorrectionNotes] = useState({});
+
+  useEffect(() => {
+    try {
+      return subscribeToRtSubmissions(
+        (snapshot) => {
+          setLaporan(snapshot.docs.map(mapReportSnapshot));
+        },
+        (snapshot) => {
+          setPengajuan(snapshot.docs.map(mapLetterSnapshot));
+        },
+        (error) => setFirestoreError(`Gagal memuat data Firestore: ${error.message}`)
+      );
+    } catch (error) {
+      setFirestoreError(`Gagal menghubungkan Firestore: ${error.message}`);
+      return undefined;
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      return subscribeToManagedLetterTypes((types) => {
+        setLetterTypes(types);
+      }, (error) => setFirestoreError(`Gagal memuat katalog surat: ${error.message}`));
+    } catch (error) {
+      setFirestoreError(`Gagal menghubungkan katalog surat: ${error.message}`);
+      return undefined;
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      return subscribeToResidentAccounts(setResidents, (error) => {
+        setFirestoreError(`Gagal memuat akun warga dari Firestore: ${error.message}`);
+      });
+    } catch (error) {
+      setFirestoreError(`Gagal menghubungkan akun warga: ${error.message}`);
+      return undefined;
+    }
+  }, []);
 
   const setTab = (id) => {
     const next = new URLSearchParams(params);
@@ -109,7 +145,6 @@ export default function Dashboard() {
       title: item.jenis,
       type: "Pengajuan surat",
       person: item.pemohon,
-      nik: item.nik || "",
       status: item.status,
       tab: "surat",
     })),
@@ -118,35 +153,48 @@ export default function Dashboard() {
       title: item.judul,
       type: "Laporan warga",
       person: item.pelapor,
-      nik: item.nik || "",
       status: item.status,
       tab: "laporan",
     })),
   ].filter((item) => {
     const key = submissionQuery.trim().toLowerCase();
-    return !key || [item.id, item.title, item.type, item.person, item.nik].some((value) => value.toLowerCase().includes(key));
+    return !key || [item.id, item.title, item.type, item.person].some((value) => value.toLowerCase().includes(key));
   }), [pengajuan, laporan, submissionQuery]);
 
-  const ubahStatusLaporan = (id, status) => {
-    setLaporan((list) => list.map((l) => {
-      if (l.id !== id) return l;
-      if (l.localIdentity) updateResidentRecord(l.localIdentity, l.localCollection, l.id, { status });
-      return { ...l, status };
-    }));
+  const ubahStatusLaporan = async (id, status) => {
+    const report = laporan.find((item) => item.id === id);
+    if (report?.docId) {
+      try {
+        await updateRtSubmission("Reports", report.docId, { status });
+      } catch (error) {
+        setFirestoreError(`Status laporan gagal disimpan: ${error.message}`);
+      }
+      return;
+    }
+    setFirestoreError("Laporan tidak memiliki referensi dokumen Firestore.");
   };
 
-  const ubahStatusPengajuan = (id, status, note) => {
-    setPengajuan((list) => list.map((p) => {
-      if (p.id !== id) return p;
-      if (p.localIdentity) updateResidentRecord(p.localIdentity, p.localCollection, p.id, { status, correctionNote: note ?? p.correctionNote });
-      return { ...p, status, correctionNote: note ?? p.correctionNote };
-    }));
+  const ubahStatusPengajuan = async (id, status, note) => {
+    const request = pengajuan.find((item) => item.id === id);
+    const correctionNote = note ?? request?.correctionNote ?? "";
+    if (request?.docId) {
+      try {
+        await updateRtSubmission("Letter Requests", request.docId, { status, correctionNote });
+      } catch (error) {
+        setFirestoreError(`Status pengajuan surat gagal disimpan: ${error.message}`);
+      }
+      return;
+    }
+    setFirestoreError("Pengajuan surat tidak memiliki referensi dokumen Firestore.");
   };
 
-  const ubahStatusWarga = (nik, status) => {
-    setResidents((list) => list.map((resident) => resident.nik === nik ? { ...resident, status } : resident));
-    if (accounts.some((account) => account.profile?.identity === nik)) {
-      writeResidentData(nik, { profile: { status } });
+  const ubahStatusWarga = async (uid, status) => {
+    const resident = residents.find((item) => item.uid === uid);
+    if (!resident) return;
+    try {
+      await updateResidentStatus(resident.uid, status);
+    } catch (error) {
+      setFirestoreError(`Status warga gagal diperbarui: ${error.message}`);
     }
   };
 
@@ -160,6 +208,7 @@ export default function Dashboard() {
 
   return (
     <>
+      {firestoreError && <p className="login-error" role="alert" style={{ marginBottom: 14 }}>{firestoreError}</p>}
       <div className="tabs" style={{ marginBottom: 18 }}>
         {tabs.map((t) => (
           <button
@@ -180,27 +229,27 @@ export default function Dashboard() {
                 <span>Total warga</span>
                 <div className="kpi-ico dark"><Icon name="users" size={17} /></div>
               </div>
-              <div className="kpi-value">{statistik.warga}</div>
-              <div className="kpi-foot"><span className="delta-up">+4</span> dari bulan lalu · {statistik.kk} KK</div>
+              <div className="kpi-value">{residents.length}</div>
+              <div className="kpi-foot">{new Set(residents.map((resident) => resident.kk).filter((value) => value !== "—")).size} KK terdata</div>
             </div>
             <div className="kpi">
               <div className="kpi-top">
-                <span>Laporan bulan ini</span>
+                <span>Total laporan</span>
                 <div className="kpi-ico orange"><Icon name="megaphone" size={17} /></div>
               </div>
-              <div className="kpi-value">{laporan.length + 29}</div>
+              <div className="kpi-value">{laporan.length}</div>
               <div className="kpi-foot">
-                <span className="delta-up">+8</span> · {laporan.filter((l) => l.status === "Selesai").length} selesai
+                {laporan.filter((l) => l.status === "Selesai").length} selesai
               </div>
             </div>
             <div className="kpi">
               <div className="kpi-top">
-                <span>Pengajuan surat</span>
+                <span>Total pengajuan surat</span>
                 <div className="kpi-ico amber"><Icon name="file" size={17} /></div>
               </div>
-              <div className="kpi-value">{statistik.suratBulanIni}</div>
+              <div className="kpi-value">{pengajuan.length}</div>
               <div className="kpi-foot">
-                <span className="delta-up">+11</span> · {pengajuan.filter((p) => p.status === "Menunggu").length} menunggu verifikasi
+                {pengajuan.filter((p) => p.status === "Menunggu").length} menunggu verifikasi
               </div>
             </div>
             <div className="kpi">
@@ -218,29 +267,28 @@ export default function Dashboard() {
               <div className="toolbar">
                 <div>
                   <h3 style={{ fontSize: 15 }}>Pengajuan &amp; laporan terbaru</h3>
-                  <p className="tiny muted">Cari berdasarkan nama warga, NIK, judul, atau nomor tiket</p>
+                  <p className="tiny muted">Cari berdasarkan nama warga, judul, atau nomor tiket</p>
                 </div>
                 <label className="toolbar-input rt-wide-search">
                   <Icon name="search" size={15} />
-                  <input value={submissionQuery} onChange={(event) => setSubmissionQuery(event.target.value)} placeholder="Cari nama / NIK…" aria-label="Cari pengajuan berdasarkan nama atau NIK" />
+                  <input value={submissionQuery} onChange={(event) => setSubmissionQuery(event.target.value)} placeholder="Cari nama / judul / nomor tiket…" aria-label="Cari pengajuan berdasarkan nama, judul, atau nomor tiket" />
                 </label>
               </div>
             </div>
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Nomor</th><th>Jenis pengajuan</th><th>Warga</th><th>NIK</th><th>Status</th><th style={{ textAlign: "right" }}>Buka</th></tr></thead>
+                <thead><tr><th>Nomor</th><th>Jenis pengajuan</th><th>Warga</th><th>Status</th><th style={{ textAlign: "right" }}>Aksi</th></tr></thead>
                 <tbody>
                   {submissions.slice(0, 8).map((item) => (
                     <tr key={`${item.type}-${item.id}`}>
                       <td className="cell-strong">{item.id}</td>
                       <td>{item.title}<span className="cell-sub">{item.type}</span></td>
                       <td>{item.person}</td>
-                      <td>{maskedNik(item.nik)}</td>
                       <td><Badge>{item.status}</Badge></td>
                       <td><div className="row-actions"><button className="btn btn-outline btn-sm" onClick={() => setTab(item.tab)}>Tinjau</button></div></td>
                     </tr>
                   ))}
-                  {!submissions.length && <tr><td colSpan="6" className="empty">Tidak ada pengajuan yang cocok dengan pencarian.</td></tr>}
+                  {!submissions.length && <tr><td colSpan="5" className="empty">Tidak ada pengajuan yang cocok dengan pencarian.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -250,7 +298,7 @@ export default function Dashboard() {
             <div className="card card-pad">
               <div className="chart-head">
                 <div>
-                  <h3>Tren layanan 6 bulan</h3>
+                  <h3>Tren layanan 6 bulan terakhir</h3>
                   <p>Perbandingan laporan warga dan pengajuan surat</p>
                 </div>
                 <div className="legend">
@@ -365,12 +413,9 @@ export default function Dashboard() {
                         <td><Badge>{l.status}</Badge></td>
                         <td>
                           <div className="row-actions">
-                            <button
-                              className="btn btn-outline btn-sm"
-                              onClick={() => ubahStatusLaporan(l.id, l.status === "Selesai" ? "Diproses" : "Selesai")}
-                            >
-                              {l.status === "Selesai" ? "Buka lagi" : "Tuntaskan"}
-                            </button>
+                            {l.status === "Selesai"
+                              ? <span className="tiny muted">Selesai</span>
+                              : <button className="btn btn-primary btn-sm" onClick={() => ubahStatusLaporan(l.id, "Selesai")}>Tuntaskan</button>}
                           </div>
                         </td>
                       </tr>
@@ -451,19 +496,20 @@ export default function Dashboard() {
                 {laporanTampil.map((l) => (
                   <tr key={l.id}>
                     <td className="cell-strong">{l.id}</td>
-                    <td>{l.judul}<span className="cell-sub">{l.lokasi ? `${l.lokasi} · ` : ""}{l.tanggal} Okt 2026</span>{l.deskripsi && <span className="cell-sub">{l.deskripsi}</span>}</td>
+                    <td>{l.judul}<span className="cell-sub">{l.lokasi ? `${l.lokasi} · ` : ""}{l.tanggal}{l.tanggal?.includes("2026") ? "" : " 2026"}</span>{l.deskripsi && <span className="cell-sub">{l.deskripsi}</span>}</td>
                     <td>{l.kategori}</td>
                     <td>{l.pelapor}</td>
                     <td><Badge tone={l.prioritas === "Tinggi" ? "tone-danger" : l.prioritas === "Sedang" ? "tone-wait" : "tone-info"}>{l.prioritas}</Badge></td>
                     <td><Badge>{l.status}</Badge></td>
                     <td>
                       <div className="row-actions">
-                        {l.status !== "Diproses" && (
+                        {l.status !== "Selesai" && l.status !== "Diproses" && (
                           <button className="btn btn-outline btn-sm" onClick={() => ubahStatusLaporan(l.id, "Diproses")}>Proses</button>
                         )}
                         {l.status !== "Selesai" && (
                           <button className="btn btn-primary btn-sm" onClick={() => ubahStatusLaporan(l.id, "Selesai")}>Selesai</button>
                         )}
+                        {l.status === "Selesai" && <span className="tiny muted">Tidak ada tindakan</span>}
                       </div>
                     </td>
                   </tr>
@@ -501,7 +547,7 @@ export default function Dashboard() {
                     <td className="cell-strong">{p.id}</td>
                     <td>{p.jenis}</td>
                     <td>{p.pemohon}<span className="cell-sub">Blok {p.blok}</span></td>
-                    <td>{p.tanggal}{p.tanggal?.includes("Okt") ? "" : " Okt"}</td>
+                    <td>{p.tanggal}{p.tanggal?.includes("2026") ? "" : " 2026"}</td>
                     <td>
                       <Badge tone={p.status === "Selesai" || p.status === "Diterbitkan" ? "tone-done" : p.status === "Diproses" || p.status === "Disetujui" ? "tone-progress" : p.status === "Perlu perbaikan" || p.status === "Ditolak" ? "tone-danger" : "tone-wait"}>
                         {p.status === "Selesai" ? "Diterbitkan" : p.status}
@@ -538,7 +584,7 @@ export default function Dashboard() {
             <div className="notice">
               <Icon name="file" size={16} />
               <span>
-                Jenis surat aktif: {jenisSurat.map((s) => s.kode).join(" · ")}. Perubahan master jenis
+                Jenis surat aktif: {letterTypes.map((s) => s.kode).join(" · ")}. Perubahan master jenis
                 surat dilakukan oleh admin sistem.
               </span>
             </div>
@@ -553,40 +599,38 @@ export default function Dashboard() {
             <div className="toolbar">
               <div>
                 <h3 style={{ fontSize: 15 }}>Basis data warga</h3>
-                <p className="tiny muted">NIK ditampilkan tersamarkan sesuai kebijakan privasi</p>
+                <p className="tiny muted">Cari data warga berdasarkan nama atau blok.</p>
               </div>
               <label className="toolbar-input">
                 <Icon name="search" size={15} />
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari nama / NIK / blok…" />
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari nama / blok…" />
               </label>
             </div>
           </div>
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>Nama</th><th>NIK</th><th>Blok</th><th>No. KK</th><th>Anggota</th><th>Status</th><th>Kontak</th><th style={{ textAlign: "right" }}>Aksi</th></tr>
+                <tr><th>Nama</th><th>Blok</th><th>No. KK</th><th>Anggota</th><th>Status</th><th>Kontak</th><th style={{ textAlign: "right" }}>Aksi</th></tr>
               </thead>
               <tbody>
                 {residents
                   .filter(
                     (w) =>
                       w.nama.toLowerCase().includes(q.toLowerCase()) ||
-                      w.blok.toLowerCase().includes(q.toLowerCase()) ||
-                      w.nik.toLowerCase().includes(q.toLowerCase())
+                      w.blok.toLowerCase().includes(q.toLowerCase())
                   )
                   .map((w) => (
-                    <tr key={w.nik}>
+                    <tr key={w.uid}>
                       <td className="cell-strong">{w.nama}</td>
-                      <td>{maskedNik(w.nik)}</td>
                       <td>{w.blok}</td>
                       <td>{w.kk}</td>
                       <td>{w.anggota} orang</td>
                       <td><Badge>{w.status}</Badge></td>
                       <td>{w.kontak}</td>
-                      <td><div className="row-actions"><button className="btn btn-outline btn-sm" onClick={() => ubahStatusWarga(w.nik, w.status === "Terverifikasi" || w.status === "Tetap" ? "Pindah keluar" : "Terverifikasi")}>{w.status === "Terverifikasi" || w.status === "Tetap" ? "Tandai pindah" : "Verifikasi"}</button></div></td>
+                      <td><div className="row-actions"><button className="btn btn-outline btn-sm" onClick={() => ubahStatusWarga(w.uid, w.status === "Terverifikasi" || w.status === "Tetap" ? "Pindah keluar" : "Terverifikasi")}>{w.status === "Terverifikasi" || w.status === "Tetap" ? "Tandai pindah" : "Verifikasi"}</button></div></td>
                     </tr>
                   ))}
-                {!residents.some((w) => w.nama.toLowerCase().includes(q.toLowerCase()) || w.blok.toLowerCase().includes(q.toLowerCase()) || w.nik.toLowerCase().includes(q.toLowerCase())) && <tr><td colSpan="8" className="empty">Warga tidak ditemukan.</td></tr>}
+                {!residents.some((w) => w.nama.toLowerCase().includes(q.toLowerCase()) || w.blok.toLowerCase().includes(q.toLowerCase())) && <tr><td colSpan="7" className="empty">Warga tidak ditemukan.</td></tr>}
               </tbody>
             </table>
           </div>

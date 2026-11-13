@@ -1,9 +1,10 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Icon, Badge } from "../components/ui.jsx";
 import { rtInfo } from "../data.js";
-import { readManagedLetterTypes } from "../adminData.js";
-import { addResidentRecord, readResidentData, writeResidentData } from "../residentData.js";
+import { subscribeToManagedLetterTypes } from "../adminData.js";
+import { updateResidentServiceProfile } from "../accountData.js";
+import { createResidentLetterRequest } from "../firestoreData.js";
 
 const steps = ["Jenis surat", "Data pemohon", "Lampiran", "Periksa & kirim"];
 
@@ -20,24 +21,39 @@ const emptyForm = {
 
 export default function PengajuanSurat({ session }) {
   const [params] = useSearchParams();
-  const [availableLetterTypes] = useState(readManagedLetterTypes);
+  const [availableLetterTypes, setAvailableLetterTypes] = useState([]);
+  const [catalogError, setCatalogError] = useState("");
   const [step, setStep] = useState(0);
   const [form, setForm] = useState(() => {
-    const profile = readResidentData(session?.identity).profile;
+    const accountProfile = session?.profile || {};
     return {
       ...emptyForm,
       jenis: params.get("jenis") || "",
-      nama: profile.name || "",
-      telepon: profile.phone || "",
-      alamat: profile.address || "",
-      blok: profile.block || "",
+      nik: /^\d{16}$/.test(session?.identity || "") ? session.identity : "",
+      nama: accountProfile.name || "",
+      telepon: accountProfile.phone || "",
+      alamat: accountProfile.address || "",
+      blok: accountProfile.block || "",
     };
   });
   const [errors, setErrors] = useState({});
+  const [submissionError, setSubmissionError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [files, setFiles] = useState([]);
   const [dragging, setDragging] = useState(false);
   const [tiket, setTiket] = useState(null);
   const fileRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      return subscribeToManagedLetterTypes((types) => {
+        setAvailableLetterTypes(types);
+      }, (error) => setCatalogError(`Gagal memuat jenis surat: ${error.message}`));
+    } catch (error) {
+      setCatalogError(`Gagal menghubungkan jenis surat: ${error.message}`);
+      return undefined;
+    }
+  }, []);
 
   const terpilih = useMemo(
     () => availableLetterTypes.find((s) => s.id === form.jenis),
@@ -82,23 +98,32 @@ export default function PengajuanSurat({ session }) {
     if (baru.length) setFiles((f) => [...f, ...baru].slice(0, 5));
   };
 
-  const kirim = () => {
+  const kirim = async () => {
     if (!validasi(3)) return;
-    const nomor = "SUR-" + Math.floor(2100 + Math.random() * 800);
-    const record = {
-      id: nomor,
-      createdAt: new Date().toISOString(),
-      status: "Menunggu",
-      jenis: terpilih?.nama || "Pengajuan surat",
-      title: terpilih?.nama || "Pengajuan surat",
-      keperluan: form.keperluan,
-      jumlahLampiran: files.length,
-    };
-    addResidentRecord(session?.identity, "letters", record);
-    writeResidentData(session?.identity, {
-      profile: { name: form.nama, phone: form.telepon, block: form.blok, address: form.alamat },
-    });
+    setSubmitting(true);
+    setSubmissionError("");
+    let submitted;
+    try {
+      await updateResidentServiceProfile(session, {
+        name: form.nama,
+        phone: form.telepon,
+        block: form.blok,
+        address: form.alamat,
+      });
+      submitted = await createResidentLetterRequest(session, {
+        ...form,
+        jenis: terpilih?.nama || "Pengajuan surat",
+        jumlahLampiran: files.length,
+      });
+    } catch (error) {
+      setSubmissionError(error.message || "Pengajuan surat gagal dikirim.");
+      setSubmitting(false);
+      return;
+    }
+
+    const nomor = submitted.ticketId;
     setTiket({ nomor, ...form, jumlahLampiran: files.length });
+    setSubmitting(false);
   };
 
   if (tiket) {
@@ -141,6 +166,7 @@ export default function PengajuanSurat({ session }) {
   return (
     <div className="split" style={{ gridTemplateColumns: "1.6fr 1fr" }}>
       <div>
+        {(submissionError || catalogError) && <p className="login-error" role="alert">{submissionError || catalogError}</p>}
         <div className="wizard">
           {steps.map((label, i) => (
             <React.Fragment key={label}>
@@ -186,6 +212,7 @@ export default function PengajuanSurat({ session }) {
                   </button>
                 ))}
               </div>
+              {!availableLetterTypes.length && <p className="muted small-text">Katalog jenis surat belum tersedia. Silakan hubungi admin sistem.</p>}
               {errors.jenis && <p className="err" style={{ marginTop: 8 }}>{errors.jenis}</p>}
             </>
           )}
@@ -215,13 +242,14 @@ export default function PengajuanSurat({ session }) {
                     inputMode="numeric"
                     maxLength={16}
                     value={form.nik}
-                    onChange={(e) => set("nik", e.target.value.replace(/\D/g, ""))}
+                    readOnly
+                    aria-describedby="nik-hint"
                     placeholder="16 angka"
                   />
                   {errors.nik ? (
                     <span className="err">{errors.nik}</span>
                   ) : (
-                    <span className="hint">{form.nik.length}/16 angka</span>
+                    <span className="hint" id="nik-hint">NIK mengikuti identitas akun terverifikasi.</span>
                   )}
                 </div>
                 <div className={`field ${errors.telepon ? "invalid" : ""}`}>
@@ -406,8 +434,8 @@ export default function PengajuanSurat({ session }) {
                 Lanjut <Icon name="arrow" size={16} />
               </button>
             ) : (
-              <button className="btn btn-primary" onClick={kirim} type="button">
-                <Icon name="check" size={16} /> Kirim pengajuan
+              <button className="btn btn-primary" onClick={kirim} type="button" disabled={submitting}>
+                <Icon name="check" size={16} /> {submitting ? "Mengirim…" : "Kirim pengajuan"}
               </button>
             )}
           </div>

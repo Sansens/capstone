@@ -50,16 +50,104 @@ pengajuan terbaru ditampilkan pada dashboard warga.
 
 Dashboard **Pengurus RT** memiliki empat bagian: Dashboard RT (`?tab=ringkasan`), Data
 Warga dan riwayat mutasi (`?tab=warga`), Verifikasi Surat (`?tab=surat`), serta Tindak
-Lanjut Laporan (`?tab=laporan`). Status dan catatan review contoh tersimpan pada sesi UI;
-submission warga yang dibuat di browser yang sama dibaca dari penyimpanan lokal demo.
+Lanjut Laporan (`?tab=laporan`). Akun warga, pengajuan, status, dan katalog jenis surat
+dibaca langsung dari Firestore dan diperbarui secara real-time.
 
-## Login dan akses peran
+## Firebase Authentication dan Firestore
 
-Halaman pertama adalah login (`/`). Pilih **Warga**, **Pengurus RT**, atau **Admin**;
-setelah mengisi identitas dan kata sandi, pengguna diarahkan ke `/warga`, `/dashboard`,
-atau `/admin`. Sesi demo disimpan di `localStorage` dan dapat diakhiri melalui tombol
-keluar. Form login ini hanya simulasi antarmuka (identitas nonkosong diterima); belum
-ada verifikasi kredensial di server dan tidak boleh dipakai untuk mengamankan data nyata.
+Login sekarang memakai Firebase Authentication (email/password). Peran tidak dipilih
+atau dipercaya dari browser: aplikasi membaca `Account/{uid}` setelah autentikasi dan
+mengarahkan akun ke halaman sesuai field `role`. Kata sandi hanya disimpan Firebase
+Authentication, tidak di koleksi Firestore.
+
+### Menyiapkan Firebase
+
+1. Buat project Firebase, aktifkan **Authentication → Email/Password**, dan buat
+   database Firestore.
+2. Salin `.env.example` menjadi `.env.local`, lalu isi konfigurasi aplikasi web Firebase.
+   Jangan masukkan kredensial Admin SDK atau service-account ke aplikasi React.
+3. Buat tiga user pada Authentication. NIK warga diterjemahkan menjadi email Auth
+   `nik-3573012011950003@silaras-rt.web.app`, sehingga warga tetap login memakai NIK.
+   Untuk demo: warga menggunakan kata sandi `123`; `pengurus@mail.com` dan
+   `admin@mail.com` masing-masing menggunakan `12345`. Ganti kata sandi demo sebelum
+   aplikasi dipublikasikan.
+4. Untuk setiap user, buat dokumen `Account` dengan ID sama persis seperti UID dari
+   Firebase Authentication:
+
+```text
+Account/{uid}
+  role: "resident" | "rt-admin" | "system-admin"
+  displayName: string
+  email: string
+  nik: string                 // warga; kosongkan atau hilangkan untuk admin
+  status: "Aktif" | "Nonaktif" // opsional; default aktif
+  createdAt: timestamp
+```
+
+Set `role` sesuai jenis user; akun contoh masing-masing memakai `resident`,
+`rt-admin`, dan `system-admin`. Jangan menambahkan field password. Akun baru dan kata
+sandi dibuat di Firebase Authentication, lalu dokumen `Account/{uid}` dibuat dengan UID
+yang sama. Panel manajemen akun hanya mengubah dokumen akun yang sudah terdaftar; aplikasi
+browser tidak membuat kredensial Authentication.
+5. Deploy `firestore.rules` dengan Firebase CLI (`firebase deploy --only
+   firestore:rules`) dan jalankan aplikasi dengan `npm run dev`.
+
+Contoh dokumen akun (ganti tiap placeholder UID dengan UID dari Authentication):
+
+```text
+Account/{UID_WARGA} = {
+  role: "resident",
+  displayName: "Warga Kelompok A",
+  email: "nik-3573012011950003@silaras-rt.web.app",
+  nik: "3573012011950003",
+  createdAt: timestamp
+}
+
+Account/{UID_PENGURUS} = {
+  role: "rt-admin",
+  displayName: "Pengurus RT",
+  email: "pengurus@mail.com",
+  createdAt: timestamp
+}
+
+Account/{UID_ADMIN} = {
+  role: "system-admin",
+  displayName: "Admin Sistem",
+  email: "admin@mail.com",
+  createdAt: timestamp
+}
+```
+
+### Struktur koleksi dan data real-time
+
+- `Account/{uid}` menyimpan peran dan profil dasar yang terikat ke UID Auth. Profil warga
+  juga menyimpan `phone`, `block`, `address`, `familyCard`, `contactEmail`,
+  `residencyStatus`, dan `residenceHistory`; warga hanya dapat mengubah profilnya sendiri,
+  sedangkan Pengurus RT dapat melihat daftar warga dan memperbarui status domisili.
+- `Reports/{autoId}` menyimpan `ticketId`, `residentUid`, `residentNik`,
+  `residentName`, `phone`, `category`, `title`, `location`, `description`,
+  `priority`, `photoCount`, `status`, dan `createdAt`.
+- `Letter Requests/{autoId}` menyimpan `ticketId`, `residentUid`, `residentNik`,
+  `residentName`, `phone`, `address`, `block`, `letterType`, `purpose`,
+  `attachmentCount`, `status`, `correctionNote`, dan `createdAt`.
+- `LetterTypes/{id}` menyimpan katalog jenis surat (`kode`, `nama`, `ringkas`, `durasi`,
+  `biaya`, `ikon`, dan `syarat`). Saat koleksi masih kosong, halaman admin sistem
+  menginisialisasi katalog contoh satu kali. Perubahan katalog di panel admin langsung
+  muncul pada formulir pengajuan warga.
+
+Form menambahkan `residentUid` dari UID Auth, memberi status awal `Menunggu`, dan
+mengisi `createdAt` dengan `serverTimestamp()`. Contoh penulisan tersebut ada di
+`src/firestoreData.js`.
+
+Form warga menulis langsung ke dua koleksi pengajuan. Dashboard warga hanya membaca
+pengajuan milik UID-nya, sedangkan dashboard Pengurus RT membaca semua pengajuan serta
+data akun warga. Akun admin sistem membaca dan mengelola akun serta katalog jenis surat.
+Security Rules membatasi pengiriman ke akun warga yang sedang login, mengunci perubahan
+profil ke pemiliknya, serta membatasi perubahan status dan pengaturan katalog berdasarkan
+peran.
+
+Untuk demo lama tanpa konfigurasi Firebase, login dan penyimpanan Firestore tidak
+tersedia; Firebase harus dikonfigurasi agar aplikasi dapat digunakan.
 
 ## Struktur
 
@@ -67,6 +155,9 @@ ada verifikasi kredensial di server dan tidak boleh dipakai untuk mengamankan da
 src/
   App.jsx                 routing & guard sesi/peran
   data.js                 data contoh (warga, surat, laporan, statistik)
+  accountData.js          profil dan data akun berbasis Firestore
+  adminData.js            katalog jenis surat berbasis Firestore
+  firestoreData.js        pengajuan laporan/surat dan subscription Firestore
   styles.css              design token & seluruh styling
   components/
     Layout.jsx            sidebar, topbar, footer
@@ -85,6 +176,6 @@ src/
     LacakStatus.jsx
 ```
 
-Catatan: seluruh data masih berupa data contoh (belum ada backend). Profil dan riwayat
-pengajuan warga demo disimpan di `localStorage` browser melalui `src/residentData.js`;
-unggahan berkas hanya simulasi antarmuka dan belum dikirim ke server.
+Catatan: data mutasi dan grafik statistik tertentu masih berupa contoh. Profil, daftar
+akun, katalog surat, laporan, dan pengajuan surat yang digunakan pada alur utama tersimpan
+di Firestore; unggahan berkas masih simulasi dan hanya jumlah lampiran yang dicatat.

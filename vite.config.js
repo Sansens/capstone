@@ -13,4 +13,15 @@ export default defineConfig({
       "pv-5276f977aeec-9240c92c-d90d-4ed5-8604-ca000dbb8e39.style.dev",
     ],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/firebase/") || id.includes("node_modules/@firebase/")) {
+            return "firebase-vendor";
+          }
+        },
+      },
+    },
+  },
 });

@@ -1,38 +1,55 @@
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  onSnapshot,
+  serverTimestamp,
+  setDoc,
+  writeBatch,
+} from "firebase/firestore";
 import { jenisSurat } from "./data.js";
+import { requireFirebase } from "./firebase.js";
 
-const ACCOUNTS_KEY = "silaras-admin-accounts";
-const LETTER_TYPES_KEY = "silaras-letter-types";
+const LETTER_TYPES_COLLECTION = "LetterTypes";
 
-const seedAccounts = [
-  { id: "ACC-RT-001", name: "Suryana Wijaya", identity: "suryana.wijaya@rt004.id", role: "rt-admin", status: "Aktif", access: ["Dashboard RT", "Data warga", "Verifikasi surat", "Tindak lanjut laporan"] },
-  { id: "ACC-ADM-001", name: "Admin Kelompok A", identity: "admin@kelompoka.id", role: "system-admin", status: "Aktif", access: ["Manajemen akun", "Pengaturan jenis surat"] },
-  { id: "ACC-W-001", name: "Rina Kartika", identity: "rina.kartika@warga.id", role: "resident", status: "Aktif", access: ["Dashboard warga", "Laporan mandiri", "Pengajuan surat", "Profil warga"] },
-  { id: "ACC-W-002", name: "Agus Salim", identity: "agus.salim@warga.id", role: "resident", status: "Aktif", access: ["Dashboard warga", "Laporan mandiri", "Pengajuan surat", "Profil warga"] },
-];
-
-function readList(key, fallback) {
-  try {
-    const stored = JSON.parse(localStorage.getItem(key) || "null");
-    return Array.isArray(stored) ? stored : fallback.map((item) => ({ ...item }));
-  } catch {
-    return fallback.map((item) => ({ ...item }));
-  }
+export function subscribeToManagedLetterTypes(onTypes, onError) {
+  const { db } = requireFirebase();
+  return onSnapshot(collection(db, LETTER_TYPES_COLLECTION), (snapshot) => {
+    const types = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+    onTypes(types.sort((first, second) => first.nama.localeCompare(second.nama, "id")));
+  }, onError);
 }
 
-export function readAdminAccounts() {
-  return readList(ACCOUNTS_KEY, seedAccounts);
+export async function initializeManagedLetterTypes() {
+  const { db } = requireFirebase();
+  const typeCollection = collection(db, LETTER_TYPES_COLLECTION);
+  const snapshot = await getDocs(typeCollection);
+  if (!snapshot.empty) return;
+
+  const batch = writeBatch(db);
+  jenisSurat.forEach((type) => {
+    const { id, ...data } = type;
+    batch.set(doc(db, LETTER_TYPES_COLLECTION, id), {
+      ...data,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  });
+  await batch.commit();
 }
 
-export function saveAdminAccounts(accounts) {
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-  return accounts;
+export async function saveManagedLetterType(type, existingId) {
+  const { db } = requireFirebase();
+  const typeRef = existingId
+    ? doc(db, LETTER_TYPES_COLLECTION, existingId)
+    : doc(collection(db, LETTER_TYPES_COLLECTION));
+  const { id: _id, ...data } = type;
+  await setDoc(typeRef, { ...data, updatedAt: serverTimestamp() }, { merge: true });
+  return typeRef.id;
 }
 
-export function readManagedLetterTypes() {
-  return readList(LETTER_TYPES_KEY, jenisSurat).map((item) => ({ ...item, syarat: [...(item.syarat || [])] }));
-}
-
-export function saveManagedLetterTypes(types) {
-  localStorage.setItem(LETTER_TYPES_KEY, JSON.stringify(types));
-  return types;
+export async function deleteManagedLetterType(typeId) {
+  const { db } = requireFirebase();
+  await deleteDoc(doc(db, LETTER_TYPES_COLLECTION, typeId));
 }
