@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { Icon } from "../components/ui.jsx";
 import { loginWithIdentity } from "../firebaseAuth.js";
 
@@ -75,13 +75,13 @@ export default function Login({ session, onLogin, authError }) {
           <div className="login-heading">
             <span className="eyebrow">Selamat datang</span>
             <h2>Masuk ke akun Anda</h2>
-            <p>Masuk menggunakan NIK warga atau email akun administrator.</p>
+            <p>Masuk menggunakan email yang terdaftar.</p>
           </div>
 
           <form className="login-form" onSubmit={handleSubmit} noValidate>
             <div className="field">
-              <label htmlFor="login-identity">NIK atau email</label>
-              <div className="login-input-wrap"><Icon name="user" size={18} /><input id="login-identity" autoComplete="username" value={identity} onChange={(event) => { setIdentity(event.target.value); setError(""); }} placeholder="Masukkan NIK atau email" /></div>
+              <label htmlFor="login-identity">Email</label>
+              <div className="login-input-wrap"><Icon name="user" size={18} /><input id="login-identity" type="email" autoComplete="username" value={identity} onChange={(event) => { setIdentity(event.target.value); setError(""); }} placeholder="nama@gmail.com" /></div>
             </div>
             <div className="field">
               <div className="login-label-row"><label htmlFor="login-password">Kata sandi</label><a href="#bantuan" onClick={(event) => event.preventDefault()}>Lupa kata sandi?</a></div>
@@ -91,6 +91,7 @@ export default function Login({ session, onLogin, authError }) {
             <button type="submit" className="btn btn-primary btn-block login-submit" disabled={submitting}>{submitting ? "Memverifikasi…" : "Masuk"}<Icon name="arrow" size={17} /></button>
           </form>
 
+          <p className="auth-switch">Belum mempunyai akun? <Link to="/daftar" className="auth-switch-link">Daftar</Link></p>
           <div className="login-security"><span><Icon name="shield" size={16} /></span><p><strong>Akses sesuai peran akun</strong><small>Peran dan hak akses dibaca dari data akun Firebase.</small></p></div>
           {/* <div className="login-copyright">© 2026 Kelompok A</div> */}
         </div>

@@ -96,7 +96,9 @@ service cloud.firestore {
     match /Account/{uid} {
       allow read: if signedIn() &&
         (request.auth.uid == uid || hasRole('rt-admin') || hasRole('system-admin'));
-      allow create: if false;
+      allow create: if signedIn() &&
+        request.auth.uid == uid &&
+        request.resource.data.role == 'resident';
       allow delete: if hasRole('system-admin') &&
         request.auth.uid != uid &&
         resource.data.role in ['resident', 'rt-admin'];
@@ -123,7 +125,7 @@ service cloud.firestore {
             .hasOnly(['displayName', 'role', 'status', 'updatedAt']) &&
           request.resource.data.role in ['resident', 'rt-admin', 'system-admin'] &&
           (!('status' in request.resource.data) ||
-            request.resource.data.status in ['Aktif', 'Nonaktif']) &&
+            request.resource.data.status in ['Active', 'Aktif', 'Nonaktif']) &&
           request.resource.data.updatedAt == request.time
         );
     }

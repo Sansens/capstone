@@ -5,6 +5,7 @@ import {
   onSnapshot,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   where,
 } from "firebase/firestore";
@@ -42,7 +43,7 @@ export function subscribeToResidentProfile(session, onProfile, onError) {
 
 export async function saveResidentProfile(session, profile, residenceHistory) {
   const { db } = requireFirebase();
-  await updateDoc(doc(db, ACCOUNT_COLLECTION, session.uid), {
+  await setDoc(doc(db, ACCOUNT_COLLECTION, session.uid), {
     displayName: profile.name,
     contactEmail: profile.email,
     phone: profile.phone,
@@ -51,18 +52,18 @@ export async function saveResidentProfile(session, profile, residenceHistory) {
     familyCard: profile.familyCard,
     residenceHistory,
     updatedAt: serverTimestamp(),
-  });
+  }, { merge: true });
 }
 
 export async function updateResidentServiceProfile(session, profile) {
   const { db } = requireFirebase();
-  await updateDoc(doc(db, ACCOUNT_COLLECTION, session.uid), {
+  await setDoc(doc(db, ACCOUNT_COLLECTION, session.uid), {
     displayName: profile.name,
     phone: profile.phone,
     ...(profile.block ? { block: profile.block } : {}),
     ...(profile.address ? { address: profile.address } : {}),
     updatedAt: serverTimestamp(),
-  });
+  }, { merge: true });
 }
 
 export function subscribeToResidentAccounts(onAccounts, onError) {
@@ -107,7 +108,7 @@ export function subscribeToManagedAccounts(onAccounts, onError) {
         name: account.displayName || "Pengguna",
         identity: account.nik || account.email || item.id,
         role: account.role,
-        status: account.status || "Aktif",
+        status: account.status === "Active" ? "Aktif" : account.status || "Aktif",
       };
     }));
   }, onError);

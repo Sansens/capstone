@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import Layout from "./components/Layout.jsx";
@@ -10,8 +10,9 @@ import AdminLetterTypes from "./pages/AdminLetterTypes.jsx";
 import ResidentDashboard from "./pages/ResidentDashboard.jsx";
 import ResidentProfile from "./pages/ResidentProfile.jsx";
 import Login from "./pages/Login.jsx";
+import Register from "./pages/Register.jsx";
 import Sistem from "./pages/Sistem.jsx";
-import { accountSessionForUser } from "./firebaseAuth.js";
+import { accountSessionForUser, registerResident } from "./firebaseAuth.js";
 import { auth } from "./firebase.js";
 const homeForRole = {
   resident: "/warga",
@@ -31,6 +32,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState("");
+  const registrationInProgress = useRef(false);
 
   useEffect(() => {
     if (!auth) {
@@ -47,6 +49,8 @@ export default function App() {
         }
         return;
       }
+
+      if (registrationInProgress.current) return;
 
       try {
         const nextSession = await accountSessionForUser(user);
@@ -81,6 +85,17 @@ export default function App() {
     setAuthError("");
   };
 
+  const register = async (resident) => {
+    registrationInProgress.current = true;
+    try {
+      const nextSession = await registerResident(resident);
+      login(nextSession);
+      return nextSession;
+    } finally {
+      registrationInProgress.current = false;
+    }
+  };
+
   const logout = async () => {
     if (auth) await signOut(auth);
     setSession(null);
@@ -93,8 +108,10 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Login session={session} onLogin={login} authError={authError} />} />
       <Route path="/login" element={<Login session={session} onLogin={login} authError={authError} />} />
+      <Route path="/daftar" element={<Register session={session} onRegister={register} />} />
       <Route element={<RequireAuth session={session} />}>
         <Route element={<Layout session={session} onLogout={logout} />}>
+          <Route path="/resident" element={<RequireRole session={session} role="resident"><ResidentDashboard session={session} /></RequireRole>} />
           <Route path="/warga" element={<RequireRole session={session} role="resident"><ResidentDashboard session={session} /></RequireRole>} />
           <Route path="/ajukan" element={<RequireRole session={session} role="resident"><PengajuanSurat session={session} /></RequireRole>} />
           <Route path="/lapor" element={<RequireRole session={session} role="resident"><LaporanMandiri session={session} /></RequireRole>} />

@@ -812,6 +812,9 @@ tbody tr:hover { background: #fffcf3; }
 .login-error { display: flex; align-items: center; gap: 7px; color: #b14a00; font-size: 11.5px; font-weight: 600; }
 .login-submit { min-height: 46px; margin-top: 2px; }
 .login-submit .icon { margin-left: auto; }
+.auth-switch { margin-top: 17px; color: var(--muted); text-align: center; font-size: 12px; }
+.auth-switch-link { color: var(--orange); font-weight: 700; }
+.auth-switch-link:hover { text-decoration: underline; }
 .login-security { display: flex; align-items: flex-start; gap: 10px; margin-top: 19px; padding: 12px; border: 1px solid rgba(77,42,0,.07); border-radius: 11px; background: #faf6ed; }
 .login-security > span { color: var(--orange); }
 .login-security strong, .login-security small { display: block; }
